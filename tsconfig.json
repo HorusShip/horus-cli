@@ -2,11 +2,7 @@
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
-    "types": ["node"],
-    "paths": {
-      "@horusship/sdk": ["../sdk/src/index.ts"],
-      "@horusship/sdk/catalog": ["../sdk/src/catalog.ts"]
-    }
+    "types": ["node"]
   },
   "include": ["src", "test"]
 }
