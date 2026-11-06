@@ -1,0 +1,25 @@
+name: Release
+# Push a tag v1.2.3 (matching package.json) to publish @horusship/cli (binary `horus`)
+# to npm with provenance plus a GitHub build attestation. Publish @horusship/sdk first.
+on:
+  push: { tags: ["v*"] }
+permissions: { contents: write, id-token: write, attestations: write }
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, registry-url: "https://registry.npmjs.org" }
+      - run: npm install --no-audit --no-fund
+      - run: npm run build && npm test
+      - name: Version matches tag
+        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+      - run: npm pack
+      - uses: actions/attest-build-provenance@v2
+        with: { subject-path: "*.tgz" }
+      - run: npm publish --provenance --access public
+        env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
+      - run: gh release create "$GITHUB_REF_NAME" *.tgz --generate-notes
+        env: { GH_TOKEN: "${{ github.token }}" }

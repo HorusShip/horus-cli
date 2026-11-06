@@ -15,11 +15,16 @@
     "README.md",
     "CHANGELOG.md"
   ],
-  "keywords": ["horus", "cli", "ebay", "amazon", "arbitrage"],
+  "keywords": [
+    "horus",
+    "cli",
+    "ebay",
+    "amazon",
+    "arbitrage"
+  ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/horusship/horus-sdk.git",
-    "directory": "packages/cli"
+    "url": "https://github.com/HorusShip/horus-cli.git"
   },
   "dependencies": {
     "@horusship/sdk": "0.1.0"
@@ -28,6 +33,19 @@
     "build": "tsup",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "tsc --noEmit -p tsconfig.json && vitest run",
-    "start": "tsx src/bin.ts"
+    "start": "tsx src/bin.ts",
+    "sync-spec": "curl -fsSL https://horusship.com/api/v1/openapi.json -o openapi/openapi.json"
+  },
+  "homepage": "https://github.com/HorusShip/horus-cli#readme",
+  "bugs": {
+    "url": "https://github.com/HorusShip/horus-cli/issues"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "openapi-typescript": "^7.4.0",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
   }
 }
