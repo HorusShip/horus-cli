@@ -29,8 +29,19 @@ describe("command tree", () => {
     });
 
     it("built-ins don't shadow resources", () => {
-        for (const b of ["login", "logout", "whoami", "api", "help"]) expect(tree.children.has(b), b).toBe(false);
+        for (const b of ["login", "logout", "whoami", "api", "help", "stats", "completion"]) expect(tree.children.has(b), b).toBe(false);
         expect(tree.children.get("webhooks")?.children.has("verify")).toBe(false);
+    });
+
+    it("friendly aliases: orders→sales, show→get, recent/search→list", () => {
+        expect(resolveCommand(tree, ["orders", "list"]).node.op?.id).toBe("sales.list");
+        expect(resolveCommand(tree, ["orders", "show", "s1"]).node.op?.id).toBe("sales.get");
+        expect(resolveCommand(tree, ["sales", "show"]).node.op?.id).toBe("sales.get");
+        expect(resolveCommand(tree, ["listings", "recent"]).node.op?.id).toBe("listings.list");
+        const search = resolveCommand(tree, ["listings", "search", "lamp"]);
+        expect(search.node.op?.id).toBe("listings.list");
+        expect(search.rest).toEqual(["lamp"]);
+        expect(search.aliasedVerb).toBe("search");
     });
 });
 
@@ -151,7 +162,7 @@ describe("help", () => {
     it("--version", async () => {
         const cli = makeCli(() => json(200, {}));
         await cli.run("--version");
-        expect(cli.out()).toMatch(/^horus 0\.1\.0 \(sdk 0\.1\.0\)/);
+        expect(cli.out()).toMatch(/^horus 0\.2\.0 \(sdk 0\.1\.0\)/);
     });
 });
 
@@ -170,6 +181,136 @@ describe("horus api", () => {
         expect(await cli.run("api", "FETCH", "/x")).toBe(2);
         expect(await cli.run("api", "GET")).toBe(2);
         expect(await cli.run("api", "GET", "/x", "--query", "novalue")).toBe(2);
+    });
+});
+
+describe("friendly aliases end to end", () => {
+    it("horus orders list calls GET /sales", async () => {
+        const cli = makeCli(() => json(200, list([])), { env: KEY_ENV });
+        expect(await cli.run("orders", "list")).toBe(0);
+        expect(cli.calls[0]?.url.pathname).toBe("/api/v1/sales");
+    });
+
+    it("horus listings show <id> calls GET /listings/<id>", async () => {
+        const cli = makeCli(() => json(200, { object: "listing", id: "l1" }), { env: KEY_ENV });
+        expect(await cli.run("listings", "show", "l1")).toBe(0);
+        expect(cli.calls[0]?.url.pathname).toBe("/api/v1/listings/l1");
+    });
+
+    it("horus sales recent calls GET /sales (same as list)", async () => {
+        const cli = makeCli(() => json(200, list([])), { env: KEY_ENV });
+        expect(await cli.run("sales", "recent")).toBe(0);
+        expect(cli.calls[0]?.url.pathname).toBe("/api/v1/sales");
+    });
+
+    it("horus listings search <text> adds --search", async () => {
+        const cli = makeCli(() => json(200, list([])), { env: KEY_ENV });
+        expect(await cli.run("listings", "search", "lamp")).toBe(0);
+        expect(cli.calls[0]?.url.searchParams.get("search")).toBe("lamp");
+    });
+
+    it("search errors clearly on a resource with no free-text field", async () => {
+        const cli = makeCli(() => json(200, list([])), { env: KEY_ENV });
+        expect(await cli.run("jobs", "search", "foo")).toBe(2);
+        expect(cli.err()).toContain("jobs.list has no free-text search field");
+    });
+});
+
+describe("did you mean", () => {
+    it("suggests a resource for a typo'd top-level command", async () => {
+        const cli = makeCli(() => json(200, {}), { env: KEY_ENV });
+        expect(await cli.run("listing", "list")).toBe(2);
+        expect(cli.err()).toContain("Did you mean `horus listings`?");
+    });
+
+    it("suggests a flag for a typo'd one", async () => {
+        const cli = makeCli(() => json(200, list([])), { env: KEY_ENV });
+        expect(await cli.run("listings", "list", "--statuss", "LISTED")).toBe(2);
+        expect(cli.err()).toContain("Did you mean --status?");
+    });
+
+    it("suggests a builtin flag for a typo'd one", async () => {
+        const cli = makeCli(() => json(200, {}));
+        expect(await cli.run("login", "--api-ky", "x")).toBe(2);
+        expect(cli.err()).toContain("Did you mean --api-key?");
+    });
+});
+
+describe("error hints", () => {
+    it("401 points at `horus login`", async () => {
+        const cli = makeCli(() => json(401, { error: { type: "authentication", code: "invalid_api_key", message: "Invalid API key." } }), { env: KEY_ENV });
+        expect(await cli.run("listings", "list")).toBe(1);
+        expect(cli.err()).toContain("Run `horus login`.");
+    });
+
+    it("503 desktop_offline points at Horus Desktop", async () => {
+        const cli = makeCli(() => json(503, { error: { type: "unavailable", code: "desktop_offline", message: "Horus Desktop is offline." } }), { env: KEY_ENV });
+        expect(await cli.run("accounts", "verify", "acc_1")).toBe(1);
+        expect(cli.err()).toContain("Start Horus Desktop and try again.");
+    });
+
+    it("hints never show up in --json error output", async () => {
+        const cli = makeCli(() => json(401, { error: { type: "authentication", code: "invalid_api_key", message: "Invalid API key." } }), { env: KEY_ENV });
+        await cli.run("listings", "list", "--json");
+        expect(JSON.parse(cli.out())).toEqual({ error: { status: 401, type: "authentication", code: "invalid_api_key", message: "Invalid API key.", details: null, request_id: null } });
+    });
+});
+
+describe("--watch", () => {
+    it("only works on read operations", async () => {
+        const cli = makeCli(() => json(200, { object: "sale", id: "s1" }), { env: KEY_ENV });
+        expect(await cli.run("sales", "ship", "s1", "--tracking-number", "1Z", "--carrier", "UPS", "--watch")).toBe(2);
+        expect(cli.err()).toContain("--watch only works with read operations");
+        expect(cli.calls).toHaveLength(0);
+    });
+
+    it("--watch-count bounds the refreshes (for scripts/tests; real use runs until Ctrl+C)", async () => {
+        const cli = makeCli(() => json(200, list([{ id: "a" }])), { env: KEY_ENV });
+        expect(await cli.run("listings", "list", "--watch", "--watch-count", "3", "--watch-interval", "0.001", "--json")).toBe(0);
+        expect(cli.calls).toHaveLength(3);
+    });
+});
+
+describe("colors", () => {
+    it("colors status words on a TTY, and never with --json or --no-color", async () => {
+        const cli = makeCli(() => json(200, list([{ id: "l1", status: "LISTED" }])), { env: KEY_ENV, isTTY: true });
+        await cli.run("listings", "list");
+        expect(cli.out()).toContain("\u001b[32mLISTED\u001b[0m");
+
+        const plain = makeCli(() => json(200, list([{ id: "l1", status: "LISTED" }])), { env: KEY_ENV, isTTY: true });
+        await plain.run("listings", "list", "--no-color");
+        expect(plain.out()).not.toContain("\u001b[");
+
+        const piped = makeCli(() => json(200, list([{ id: "l1", status: "LISTED" }])), { env: KEY_ENV, isTTY: false });
+        await piped.run("listings", "list");
+        expect(piped.out()).not.toContain("\u001b[");
+    });
+
+    it("surfaces a sale's profit as a colored top-level column", async () => {
+        const sale = { object: "sale", id: "s1", status: "PAID", amounts: { profit: { amount: 4.5, currency: "USD" } } };
+        const cli = makeCli(() => json(200, list([sale])), { env: KEY_ENV, isTTY: true });
+        await cli.run("sales", "list");
+        expect(cli.out()).toContain("4.50 USD");
+        expect(cli.out()).toContain("\u001b[32m");
+    });
+});
+
+describe("horus completion", () => {
+    it("prints a script for a supported shell", async () => {
+        const cli = makeCli(() => json(200, {}));
+        expect(await cli.run("completion", "bash")).toBe(0);
+        expect(cli.out()).toContain("_horus_complete");
+    });
+
+    it("needs a shell name", async () => {
+        const cli = makeCli(() => json(200, {}));
+        expect(await cli.run("completion")).toBe(2);
+    });
+
+    it("has its own --help", async () => {
+        const cli = makeCli(() => json(200, {}));
+        await cli.run("completion", "--help");
+        expect(cli.out()).toContain("Print a shell completion script.");
     });
 });
 

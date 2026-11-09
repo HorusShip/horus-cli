@@ -69,6 +69,11 @@ describe("buildParams", () => {
         expect(() => buildParams(op("me.get"), args(), { a: 1 }, GLOBAL_FLAG_NAMES)).toThrow(/takes no parameters/);
     });
 
+    it("suggests a close flag name on a typo, but not when nothing is close", () => {
+        expect(() => buildParams(op("listings.list"), args("--statuss", "LISTED"), undefined, GLOBAL_FLAG_NAMES)).toThrow(/Did you mean --status\?/);
+        expect(() => buildParams(op("sales.ship"), args("--nope", "1"), undefined, GLOBAL_FLAG_NAMES)).not.toThrow(/Did you mean/);
+    });
+
     it("lists missing required fields", () => {
         expect(missingRequired(op("accounts.jobs.create"), {})).toEqual(["--kind"]);
         expect(missingRequired(op("accounts.jobs.create"), { kind: "LOGIN" })).toEqual([]);

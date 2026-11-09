@@ -39,19 +39,32 @@ export interface Resolved {
     node: CommandNode;
     /** Positionals left after the command words (path params). */
     rest: string[];
+    /** The friendlier verb actually typed, when it resolved via `VERB_ALIASES` (e.g. "show" for a `get`). */
+    aliasedVerb?: string;
 }
+
+/** `horus orders …` reads as `horus sales …` (no such operation group as "orders", but it's what sellers call them). Only tried on the first word. */
+export const TOP_LEVEL_ALIASES: Readonly<Record<string, string>> = { orders: "sales" };
+
+/** A friendlier verb for an existing one, used wherever the resource doesn't already define that word itself. */
+const VERB_ALIASES: Readonly<Record<string, string>> = { show: "get", recent: "list", search: "list" };
 
 /** Walk command words; stops at the first operation or the first unknown word. */
 export function resolveCommand(root: CommandNode, positionals: readonly string[]): Resolved {
     let cur = root;
     let i = 0;
+    let aliasedVerb: string | undefined;
     while (i < positionals.length && !cur.op) {
-        const next = cur.children.get(kebab(positionals[i] ?? ""));
+        const word = kebab(positionals[i] ?? "");
+        const top = cur === root ? TOP_LEVEL_ALIASES[word] : undefined;
+        const alias = top ?? (!cur.children.has(word) ? VERB_ALIASES[word] : undefined);
+        const next = cur.children.get(alias ?? word);
         if (!next) break;
+        if (alias) aliasedVerb = word;
         cur = next;
         i++;
     }
-    return { node: cur, rest: positionals.slice(i) };
+    return { node: cur, rest: positionals.slice(i), ...(aliasedVerb ? { aliasedVerb } : {}) };
 }
 
 /** Every operation under a node, depth-first. */

@@ -5,6 +5,7 @@ import type { CliContext } from "./context.js";
 import { printResult, sessionOptions } from "./globals.js";
 import { loadData, UsageError } from "./params.js";
 import { openSession } from "./session.js";
+import { withSpinner } from "./spinner.js";
 
 const METHODS: readonly HttpMethod[] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 
@@ -34,13 +35,14 @@ export async function apiCommand(ctx: CliContext, args: ParsedArgs, rest: readon
     if (!rawPath || rest.length > 2) throw new UsageError("Usage: horus api <METHOD> <path>, e.g. horus api GET /listings --query status=LISTED");
     const path = rawPath.replace(/^\/?api\/v1(?=\/)/, "");
     const data = stringFlag(args, "data");
+    const body = data !== undefined ? await loadData(data, ctx) : undefined;
     const session = await openSession(ctx, sessionOptions(args));
     const key = stringFlag(args, "idempotency-key");
-    const result = await session.horus.request(m, path, {
+    const result = await withSpinner(ctx, args, "Loading…", () => session.horus.request(m, path, {
         query: parseQuery(args.flags.get("query") ?? []),
-        ...(data !== undefined ? { body: await loadData(data, ctx) } : {}),
+        ...(body !== undefined ? { body } : {}),
         ...(key ? { idempotencyKey: key } : {}),
-    });
+    }));
     printResult(ctx, args, result);
     return 0;
 }

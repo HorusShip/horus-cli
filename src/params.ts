@@ -5,6 +5,7 @@
 import type { OperationInfo, ParamInfo, ParamType } from "@horusship/sdk/catalog";
 import { normalizeFlag, type FlagValue, type ParsedArgs } from "./argv.js";
 import type { CliContext } from "./context.js";
+import { closest } from "./suggest.js";
 
 export class UsageError extends Error {
     override readonly name = "UsageError";
@@ -98,7 +99,10 @@ export function buildParams(op: OperationInfo, args: ParsedArgs, data: unknown, 
     for (const [name, values] of args.flags) {
         if (reserved.has(name) || pathFlags.has(name)) continue;
         const p = byFlag.get(name);
-        if (!p) throw new UsageError(`Unknown flag --${name}. Run with --help to see the flags.`);
+        if (!p) {
+            const did = closest(name, [...byFlag.keys()]);
+            throw new UsageError(`Unknown flag --${name}. Run with --help to see the flags.${did ? ` Did you mean --${did}?` : ""}`);
+        }
         out[p.name] = coerce(p, values);
     }
     return out;

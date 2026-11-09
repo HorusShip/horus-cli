@@ -6,8 +6,13 @@ import type { CliContext } from "./context.js";
 import { GLOBAL_FLAG_NAMES, printResult, sessionOptions } from "./globals.js";
 import { buildParams, loadData, missingRequired, pathParams, UsageError } from "./params.js";
 import { openSession, type Session } from "./session.js";
+import { withSpinner } from "./spinner.js";
+import { watchLoop } from "./watch.js";
 
 const DEFAULT_WAIT_S = 600;
+const DEFAULT_WATCH_S = 5;
+/** Clears the screen and homes the cursor (used between `--watch` refreshes on a TTY). */
+const CLEAR_SCREEN = "\u001b[2J\u001b[3J\u001b[H";
 
 function routeId(op: OperationInfo): RouteId {
     if (!(op.id in ROUTES)) throw new UsageError(`Unknown operation ${op.id}.`);
@@ -61,12 +66,42 @@ async function waitIfAsked(session: Session, result: unknown, args: ParsedArgs, 
     });
 }
 
+function positiveSeconds(args: ParsedArgs, flag: string, fallback: number): number {
+    const raw = Number(stringFlag(args, flag) ?? fallback);
+    if (!Number.isFinite(raw) || raw <= 0) throw new UsageError(`--${flag} expects a number of seconds.`);
+    return raw;
+}
+
+function watchCount(args: ParsedArgs): number | undefined {
+    const raw = stringFlag(args, "watch-count");
+    if (raw === undefined) return undefined;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n <= 0) throw new UsageError("--watch-count expects a positive integer.");
+    return n;
+}
+
+/** `--watch`: re-run a read-only operation on an interval until the process is stopped (Ctrl+C), like the Unix `watch` command. */
+async function watchOperation(op: OperationInfo, path: Record<string, string>, params: unknown, args: ParsedArgs, ctx: CliContext, session: Session): Promise<number> {
+    const seconds = positiveSeconds(args, "watch-interval", DEFAULT_WATCH_S);
+    await watchLoop(ctx, { intervalMs: seconds * 1000, maxIterations: watchCount(args) }, async () => {
+        const result = await fetchResult(session, op, path, params, args);
+        if (ctx.isTTY) ctx.stdout(CLEAR_SCREEN);
+        printResult(ctx, args, result, op);
+        ctx.stderr(`\nWatching every ${seconds}s — Ctrl+C to stop.\n`);
+    });
+    return 0;
+}
+
 /** Exit status: 0, or 1 when a waited-for job did not succeed. */
 export async function runOperation(op: OperationInfo, args: ParsedArgs, rest: readonly string[], ctx: CliContext): Promise<number> {
     const path = pathParams(op, rest, args);
     const params = await collectParams(op, args, ctx);
     const session = await openSession(ctx, sessionOptions(args));
-    const result = await waitIfAsked(session, await fetchResult(session, op, path, params, args), args, ctx);
-    printResult(ctx, args, result);
+    if (boolFlag(args, "watch")) {
+        if (op.method !== "GET") throw new UsageError("--watch only works with read operations (a list or get).");
+        return watchOperation(op, path, params, args, ctx, session);
+    }
+    const result = await waitIfAsked(session, await withSpinner(ctx, args, "Loading…", () => fetchResult(session, op, path, params, args)), args, ctx);
+    printResult(ctx, args, result, op);
     return isJob(result) && boolFlag(args, "wait") && result.status !== "SUCCEEDED" ? 1 : 0;
 }
